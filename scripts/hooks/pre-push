@@ -1,0 +1,40 @@
+#!/bin/bash
+
+status=0
+
+if [[ $(codespell --skip ./**/target,./**/build,./docs/*.js,./docs/*.json,*.svg -I .codespellignore 2>&1) ]];
+then
+    echo "There are typos in some of the files you've changed. Please run the following to check what they are:"
+    echo "codespell --skip ./**/target,./**/build,./docs/*.js,./docs/*.json -I .codespellignore"
+    echo ""
+    status=1
+fi
+
+# Run clang-format on CUDA, C, and CPP files
+# clang-format writes to stderr in dry-run mode. In order to capture the output to detect if there are changes needed we redirect stderr to stdin
+./scripts/format_all.sh . --exclude "build|wrappers" --check
+
+# Run go fmt across all Golang packages
+if [[ $(go list ./... | xargs go fmt) ]];
+then
+    echo "🚨 There are Golang files that need formatting."
+    echo "Please commit the formatted files"
+    echo ""
+    status=1
+else
+    echo "🟩 Golang files format is fine"
+fi
+
+# Run cargo fmt on Rust files
+cd wrappers/rust
+if [[ $(find . -path ./icicle-curves/icicle-curve-template -prune -o -name target -prune -o -iname *.rs -print | xargs cargo fmt --check --) ]];
+then
+    echo "🚨 There are Rust files that need formatting."
+    echo "Please go to wrappers/rust and format the Rust files using the following command:"
+    echo "find . -path ./icicle-curves/icicle-curve-template -prune -o -name target -prune -o -iname *.rs -print | xargs cargo fmt --check --"
+    status=1
+else
+    echo "🟩 Rust files format is fine"
+fi
+
+exit $status
