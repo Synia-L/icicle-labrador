@@ -44,10 +44,11 @@ done
 DEVICE_TYPE_LOWERCASE=$(echo "$DEVICE_TYPE" | tr '[:upper:]' '[:lower:]')
 
 # Create necessary directories
-mkdir -p build/example
+mkdir -p build/src
 mkdir -p build/icicle
 
-ICILE_DIR=$(realpath "../../../icicle/")
+# Paths from root directory
+ICILE_DIR=$(realpath "icicle/")
 ICICLE_BACKEND_SOURCE_DIR="${ICILE_DIR}/backend/${DEVICE_TYPE_LOWERCASE}"
 
 # Build Icicle and the example app that links to it
@@ -60,10 +61,12 @@ else
   export ICICLE_BACKEND_INSTALL_DIR="${ICICLE_BACKEND_INSTALL_DIR}"
   cmake -DCMAKE_BUILD_TYPE=Release -DRING=babykoala -S "${ICILE_DIR}" -B build/icicle
 fi
-cmake -DCMAKE_BUILD_TYPE=Release -S . -B build/example
+
+# Build the src project
+cmake -DCMAKE_BUILD_TYPE=Release -S src -B build/src
 
 cmake --build build/icicle -j
-cmake --build build/example -j
+cmake --build build/src -j
 
-./build/example/example "$DEVICE_TYPE"
-# compute-sanitizer --tool memcheck --leak-check full ./build/example/example "$DEVICE_TYPE" > sanitizer_output.log 2>&1
+./build/src/example "$DEVICE_TYPE"
+# compute-sanitizer --tool memcheck --leak-check full ./build/src/example "$DEVICE_TYPE" > sanitizer_output.log 2>&1

@@ -16,13 +16,15 @@ add_executable(example
   test_helpers.cpp
   benchmarking.cpp
 )
+
 install(TARGETS example
   RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/"
   LIBRARY DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/"
   ARCHIVE DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/")
 
-target_include_directories(example PRIVATE "../../../icicle/include" "..")
-target_link_directories(example PRIVATE "${CMAKE_SOURCE_DIR}/build/icicle")
+target_include_directories(example PRIVATE "../icicle/include")
+# Fix the link directory - CMAKE_SOURCE_DIR points to src/, but we need the parent directory
+target_link_directories(example PRIVATE "${CMAKE_SOURCE_DIR}/../build/icicle")
 target_link_libraries(example PRIVATE icicle_ring_babykoala icicle_device icicle_hash)
 
 if(BACKEND_DIR)

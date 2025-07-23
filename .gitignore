@@ -22,7 +22,7 @@
 .cache*
 **tar.gz
 
-examples/c++/labrador/*.csv
+*.csv
 
 #ignore all backends except cpu
 icicle/backend/*
