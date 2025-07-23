@@ -32,7 +32,7 @@ The main program runs a simple benchmarking program for which the parameters can
 
 You can also run the function `prover_verifier_trace` in main. This function runs 3 recursion iterations of the Labrador protocol for a random instance.
 
-The following flag in [prover.h](./prover.h) can be used to control the program output:
+The following flag in [prover.h](./src/prover.h) can be used to control the program output:
 
 ```cpp
 // SHOW_STEPS creates a print output listing every step performed by the Prover and the time taken
