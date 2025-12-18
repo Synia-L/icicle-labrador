@@ -283,7 +283,7 @@ struct PartialTranscript {
 
 /// @brief Struct to hold the proof for the base case
 ///
-/// z_hat: is the vector computed in Step 29 of the base_case_prover
+/// z: is the vector computed in Step 29 of the base_case_prover (stored in Rq)
 ///
 /// t: vector computed in Step 9 of the base_case_prover (T_tilde in the code)
 ///
@@ -293,17 +293,17 @@ struct PartialTranscript {
 ///
 /// @note constructor doesn't check dimensions
 struct LabradorBaseCaseProof {
-  std::vector<Tq> z_hat;
+  std::vector<Rq> z;
   std::vector<Rq> t, g, h;
 
   LabradorBaseCaseProof() = default;
   LabradorBaseCaseProof(
-    const std::vector<Tq>& z_hat, const std::vector<Tq>& t, const std::vector<Tq>& g, const std::vector<Tq>& h)
-      : z_hat(z_hat), t(t), g(g), h(h)
+    const std::vector<Rq>& z, const std::vector<Rq>& t, const std::vector<Rq>& g, const std::vector<Rq>& h)
+      : z(z), t(t), g(g), h(h)
   {
   }
-  LabradorBaseCaseProof(const LabradorBaseCaseProof& other) : z_hat(other.z_hat), t(other.t), g(other.g), h(other.h) {}
+  LabradorBaseCaseProof(const LabradorBaseCaseProof& other) = default;
 
   /// @return Proof size in Bytes
-  size_t size() const { return (z_hat.size() + t.size() + g.size() + h.size()) * Rq::d * sizeof(Zq); }
+  size_t size() const { return (z.size() + t.size() + g.size() + h.size()) * Rq::d * sizeof(Zq); }
 };

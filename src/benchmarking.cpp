@@ -74,6 +74,7 @@ BenchmarkResult run_benchmark(const BenchmarkConfig& config, bool SKIP_VERIF)
     if (!SKIP_VERIF) {
       // Verify the proof
       std::cout << "\nRunning the Verifier...";
+      auto v_start = std::chrono::high_resolution_clock::now();
       std::vector<BaseProverMessages> prover_msgs;
       for (const auto& transcript : trs) {
         prover_msgs.push_back(transcript.prover_msg);
@@ -82,12 +83,15 @@ BenchmarkResult run_benchmark(const BenchmarkConfig& config, bool SKIP_VERIF)
       LabradorVerifier verifier{lab_inst,           prover_msgs,
                                 final_proof,        reinterpret_cast<const std::byte*>(oracle_seed.data()),
                                 oracle_seed.size(), NUM_REC};
+      
 
-      if (!verifier.verify()) {
-        all_verified = false;
-        std::cerr << "FAILED\n Verification failed for repetition " << rep << std::endl;
-      }
-      std::cout << "SUCCESS!\n\n";
+      bool ok = verifier.verify();
+
+      auto v_end = std::chrono::high_resolution_clock::now();
+      double v_ms = std::chrono::duration_cast<std::chrono::microseconds>(v_end - v_start).count() / 1000.0;
+      std::cout << (ok ? "SUCCESS!" : "FAILED") << "  Verifier time: " << std::fixed << std::setprecision(2)
+                << v_ms << " ms\n\n";
+      if (!ok) { all_verified = false; }
     }
     std::cout << "  Rep " << (rep + 1) << "/" << config.num_repetitions << ": " << std::fixed << std::setprecision(2)
               << millis << " ms" << std::endl;

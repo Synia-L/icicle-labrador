@@ -1,4 +1,5 @@
 #include "types.h"
+#include "vec_ops_selector.h"  // 自定义VecOps选择器
 
 // Modifies equality constraints
 void LabradorInstance::agg_equality_constraints(const std::vector<Tq>& alpha_hat)
@@ -27,7 +28,7 @@ void LabradorInstance::agg_equality_constraints(const std::vector<Tq>& alpha_hat
   ICICLE_CHECK(icicle_device_synchronize());
   // final_const.a = \sum_k equality_constraints[k].a
   for (size_t k = 0; k < K; k++) {
-    ICICLE_CHECK(vector_add(final_const.a.data(), equality_constraints[k].a.data(), r * r, {}, final_const.a.data()));
+    ICICLE_CHECK(USE_SMART_VECTOR_ADD(final_const.a.data(), equality_constraints[k].a.data(), r * r, {}, final_const.a.data()));
   }
 
   // φ'_i = ∑_{k=0}^{K-1} α_k * φ_i^{(k)}
@@ -41,7 +42,7 @@ void LabradorInstance::agg_equality_constraints(const std::vector<Tq>& alpha_hat
   // final_const.phi = \sum_k equality_constraints[k].phi
   for (size_t k = 0; k < K; k++) {
     ICICLE_CHECK(
-      vector_add(final_const.phi.data(), equality_constraints[k].phi.data(), r * n, {}, final_const.phi.data()));
+      USE_SMART_VECTOR_ADD(final_const.phi.data(), equality_constraints[k].phi.data(), r * n, {}, final_const.phi.data()));
   }
 
   // b = ∑_{k=0}^{K-1} α_k * b^{(k)}
@@ -51,8 +52,8 @@ void LabradorInstance::agg_equality_constraints(const std::vector<Tq>& alpha_hat
 
     // Multiply by α_k and add to sum (T_q operations)
     Tq temp;
-    ICICLE_CHECK(vector_mul(&alpha_hat[k], &b_k, 1, {}, &temp));
-    ICICLE_CHECK(vector_add(&final_const.b, &temp, 1, {}, &final_const.b));
+    ICICLE_CHECK(USE_SMART_VECTOR_MUL(&alpha_hat[k], &b_k, 1, {}, &temp));
+    ICICLE_CHECK(USE_SMART_VECTOR_ADD(&final_const.b, &temp, 1, {}, &final_const.b));
   }
 
   equality_constraints = {final_const};

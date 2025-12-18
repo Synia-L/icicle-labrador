@@ -1,4 +1,8 @@
 #include "verifier.h"
+#include "ntt_selector.h"  // 添加自定义NTT选择器
+#include "matmul_selector.h"  // 添加自定义MatMul选择器
+#include "vec_ops_selector.h"  // 添加自定义VecOps选择器
+#include "misc_ops_selector.h"  // 添加自定义Misc Ops选择器
 
 // Fills up trs correctly assuming trs.prover_msg are correctly filled
 void LabradorBaseVerifier::create_transcript()
@@ -66,18 +70,16 @@ void LabradorBaseVerifier::create_transcript()
   size_t r = lab_inst.param.r;
   std::vector<Rq> challenge = sample_low_norm_challenges(n, r, trs.seed4.data(), trs.seed4.size());
   trs.challenges_hat.resize(r);
-  ntt(challenge.data(), challenge.size(), NTTDir::kForward, {}, trs.challenges_hat.data());
+  USE_SMART_NTT(challenge.data(), challenge.size(), NTTDir::kForward, {}, trs.challenges_hat.data());
 }
 
-// TODO: maybe make BaseProof more consistent by making everything Rq, since we have to convert z_hat to Rq before norm
-// check anyway
 bool LabradorBaseVerifier::_verify_base_proof(const LabradorBaseCaseProof& base_proof) const
 {
   size_t n = lab_inst.param.n;
   size_t r = lab_inst.param.r;
   size_t d = Rq::d;
 
-  auto& z_hat = base_proof.z_hat;
+  const auto& z = base_proof.z;
   auto& t_tilde = base_proof.t;
   auto& g_tilde = base_proof.g;
   auto& h_tilde = base_proof.h;
@@ -111,16 +113,14 @@ bool LabradorBaseVerifier::_verify_base_proof(const LabradorBaseCaseProof& base_
 
   // TODO: LInfinity for t,g,h already checked. Do we need to do a L2 check for them too?
   bool z_small = true;
-  // z = INTT(z_hat)
-  std::vector<Rq> z(z_hat.size());
-  ICICLE_CHECK(ntt(z_hat.data(), z_hat.size(), NTTDir::kInverse, {}, z.data()));
 
   uint64_t op_norm_bound = lab_inst.param.op_norm_bound;
   double beta = lab_inst.param.beta;
   // Check ||z|| < op_norm*beta*sqrt(r)
   // NOTE: if n > 2^10 then this fails-- Verifier can again test this using a JL projection
   ICICLE_CHECK(check_norm_bound(
-    reinterpret_cast<Zq*>(z.data()), z.size() * d, eNormType::L2, op_norm_bound * beta * sqrt(r), {}, &z_small));
+    reinterpret_cast<const Zq*>(z.data()), z.size() * d, eNormType::L2, op_norm_bound * beta * sqrt(r), {},
+    &z_small));
 
   if (!z_small) {
     std::cout << "L2 norm check for z failed\n";
@@ -131,9 +131,9 @@ bool LabradorBaseVerifier::_verify_base_proof(const LabradorBaseCaseProof& base_
 
   // compute NTTs of t_tilde, g_tilde, h_tilde
   std::vector<Tq> t_tilde_hat(t_tilde.size()), g_tilde_hat(g_tilde.size()), h_tilde_hat(h_tilde.size());
-  ICICLE_CHECK(ntt(t_tilde.data(), t_tilde.size(), NTTDir::kForward, {}, t_tilde_hat.data()));
-  ICICLE_CHECK(ntt(g_tilde.data(), g_tilde.size(), NTTDir::kForward, {}, g_tilde_hat.data()));
-  ICICLE_CHECK(ntt(h_tilde.data(), h_tilde.size(), NTTDir::kForward, {}, h_tilde_hat.data()));
+  ICICLE_CHECK(USE_SMART_NTT(t_tilde.data(), t_tilde.size(), NTTDir::kForward, {}, t_tilde_hat.data()));
+  ICICLE_CHECK(USE_SMART_NTT(g_tilde.data(), g_tilde.size(), NTTDir::kForward, {}, g_tilde_hat.data()));
+  ICICLE_CHECK(USE_SMART_NTT(h_tilde.data(), h_tilde.size(), NTTDir::kForward, {}, h_tilde_hat.data()));
 
   size_t kappa1 = lab_inst.param.kappa1;
 
@@ -147,7 +147,7 @@ bool LabradorBaseVerifier::_verify_base_proof(const LabradorBaseCaseProof& base_
   std::vector<Tq> v2 = ajtai_commitment(C, g_tilde_hat.size(), kappa1, g_tilde_hat.data(), g_tilde_hat.size());
   // u1 = v1+v2
   std::vector<Tq> u1(kappa1);
-  vector_add(v1.data(), v2.data(), kappa1, {}, u1.data());
+  USE_SMART_VECTOR_ADD(v1.data(), v2.data(), kappa1, {}, u1.data());
 
   // check t_tilde, g_tilde open u1 in trs
   if (!(poly_vec_eq(u1.data(), trs.prover_msg.u1.data(), kappa1))) {
@@ -167,17 +167,21 @@ bool LabradorBaseVerifier::_verify_base_proof(const LabradorBaseCaseProof& base_
 
   // 4. Check Az = \sum_i c_i*t_i
 
+  // Compute NTT(z) once for subsequent checks
+  std::vector<Tq> z_hat(z.size());
+  ICICLE_CHECK(USE_SMART_NTT(z.data(), z.size(), NTTDir::kForward, {}, z_hat.data()));
+
   // Use ajtai_commitment to compute z_hat @ A
   size_t kappa = lab_inst.param.kappa;
   std::vector<Tq> zA_hat = ajtai_commitment(A, n, kappa, z_hat.data(), n);
 
   std::vector<Rq> t(r * kappa);
-  ICICLE_CHECK(recompose(t_tilde.data(), t_tilde.size(), base1, {}, t.data(), t.size()));
+  ICICLE_CHECK(USE_SMART_RECOMPOSE(t_tilde.data(), t_tilde.size(), base1, {}, t.data(), t.size()));
   std::vector<Tq> t_hat(r * kappa), ct_hat(kappa);
   // t_hat = NTT(t)
-  ICICLE_CHECK(ntt(t.data(), r * kappa, NTTDir::kForward, {}, t_hat.data()));
+  ICICLE_CHECK(USE_SMART_NTT(t.data(), r * kappa, NTTDir::kForward, {}, t_hat.data()));
   // ct_hat = \sum_i c_i t_i = [c1 c2 ... cr] @ t_hat
-  ICICLE_CHECK(matmul(challenges_hat.data(), 1, r, t_hat.data(), r, kappa, {}, ct_hat.data()));
+  ICICLE_CHECK(USE_SMART_MATMUL(challenges_hat.data(), 1, r, t_hat.data(), r, kappa, {}, ct_hat.data()));
   // zA_hat == \sum_i c_i t_i
   if (!(poly_vec_eq(zA_hat.data(), ct_hat.data(), kappa))) {
     std::cout << "_verify_base_proof failed: zA != cT \n";
@@ -188,49 +192,49 @@ bool LabradorBaseVerifier::_verify_base_proof(const LabradorBaseCaseProof& base_
 
   size_t r_choose_2 = (r * (r + 1)) / 2;
   std::vector<Rq> g(r_choose_2);
-  ICICLE_CHECK(recompose(g_tilde.data(), g_tilde.size(), base2, {}, g.data(), g.size()));
+  ICICLE_CHECK(USE_SMART_RECOMPOSE(g_tilde.data(), g_tilde.size(), base2, {}, g.data(), g.size()));
   std::vector<Rq> G = reconstruct_symm_matrix(g, r);
 
   std::vector<Tq> G_hat(r * r);
   // G_hat = NTT(G)
-  ICICLE_CHECK(ntt(G.data(), r * r, NTTDir::kForward, {}, G_hat.data()));
+  ICICLE_CHECK(USE_SMART_NTT(G.data(), r * r, NTTDir::kForward, {}, G_hat.data()));
 
   std::vector<Rq> h(r_choose_2);
-  ICICLE_CHECK(recompose(h_tilde.data(), h_tilde.size(), base3, {}, h.data(), h.size()));
+  ICICLE_CHECK(USE_SMART_RECOMPOSE(h_tilde.data(), h_tilde.size(), base3, {}, h.data(), h.size()));
   std::vector<Rq> H = reconstruct_symm_matrix(h, r);
 
   std::vector<Tq> H_hat(r * r);
   // H_hat = NTT(H)
-  ICICLE_CHECK(ntt(H.data(), r * r, NTTDir::kForward, {}, H_hat.data()));
+  ICICLE_CHECK(USE_SMART_NTT(H.data(), r * r, NTTDir::kForward, {}, H_hat.data()));
 
   Tq ip_z_z, c_G_c, c_H_c, ip_a_G, c_Phi_z, trace_H;
 
   // ip_z_z = <z_hat,z_hat> - inner product of z_hat with itself
-  ICICLE_CHECK(matmul(z_hat.data(), 1, n, z_hat.data(), n, 1, {}, &ip_z_z));
+  ICICLE_CHECK(USE_SMART_MATMUL(z_hat.data(), 1, n, z_hat.data(), n, 1, {}, &ip_z_z));
 
   // c_G_c = challenges_hat^T * G_hat * challenges_hat
   // First compute G_hat * challenges_hat
   std::vector<Tq> G_times_c(r);
-  ICICLE_CHECK(matmul(G_hat.data(), r, r, challenges_hat.data(), r, 1, {}, G_times_c.data()));
+  ICICLE_CHECK(USE_SMART_MATMUL(G_hat.data(), r, r, challenges_hat.data(), r, 1, {}, G_times_c.data()));
   // Then compute challenges_hat^T * (G_hat * challenges_hat)
-  ICICLE_CHECK(matmul(challenges_hat.data(), 1, r, G_times_c.data(), r, 1, {}, &c_G_c));
+  ICICLE_CHECK(USE_SMART_MATMUL(challenges_hat.data(), 1, r, G_times_c.data(), r, 1, {}, &c_G_c));
 
   // c_H_c = challenges_hat^T * H_hat * challenges_hat
   // First compute H_hat * challenges_hat
   std::vector<Tq> H_times_c(r);
-  ICICLE_CHECK(matmul(H_hat.data(), r, r, challenges_hat.data(), r, 1, {}, H_times_c.data()));
+  ICICLE_CHECK(USE_SMART_MATMUL(H_hat.data(), r, r, challenges_hat.data(), r, 1, {}, H_times_c.data()));
   // Then compute challenges_hat^T * (H_hat * challenges_hat)
-  ICICLE_CHECK(matmul(challenges_hat.data(), 1, r, H_times_c.data(), r, 1, {}, &c_H_c));
+  ICICLE_CHECK(USE_SMART_MATMUL(challenges_hat.data(), 1, r, H_times_c.data(), r, 1, {}, &c_H_c));
 
   // ip_a_G = <final_const.a, G_hat> - inner product of flattened matrices
-  ICICLE_CHECK(matmul(final_const.a.data(), 1, r * r, G_hat.data(), r * r, 1, {}, &ip_a_G));
+  ICICLE_CHECK(USE_SMART_MATMUL(final_const.a.data(), 1, r * r, G_hat.data(), r * r, 1, {}, &ip_a_G));
 
   // c_Phi_z = challenges_hat^T * final_const.phi * z_hat
   // First compute phi * z_hat
   std::vector<Tq> phi_times_z(r);
-  ICICLE_CHECK(matmul(final_const.phi.data(), r, n, z_hat.data(), n, 1, {}, phi_times_z.data()));
+  ICICLE_CHECK(USE_SMART_MATMUL(final_const.phi.data(), r, n, z_hat.data(), n, 1, {}, phi_times_z.data()));
   // Then compute challenges_hat^T * (phi * z_hat)
-  ICICLE_CHECK(matmul(challenges_hat.data(), 1, r, phi_times_z.data(), r, 1, {}, &c_Phi_z));
+  ICICLE_CHECK(USE_SMART_MATMUL(challenges_hat.data(), 1, r, phi_times_z.data(), r, 1, {}, &c_Phi_z));
 
   // compute trace_H = \sum_i H_ii
   ICICLE_CHECK(compute_matrix_trace(H_hat.data(), r, &trace_H));
@@ -250,10 +254,10 @@ bool LabradorBaseVerifier::_verify_base_proof(const LabradorBaseCaseProof& base_
   // 7. Ensure: \sum_ij a_ij G_ij + \sum_i h_ii + b == 0
   // \sum_ij a_ij G_ij + \sum_i h_ii
   Tq ip_a_G_plus_trace_H;
-  ICICLE_CHECK(vector_add(&ip_a_G, &trace_H, 1, {}, &ip_a_G_plus_trace_H));
+  ICICLE_CHECK(USE_SMART_VECTOR_ADD(&ip_a_G, &trace_H, 1, {}, &ip_a_G_plus_trace_H));
 
   Tq ip_a_G_plus_trace_H_plus_b;
-  ICICLE_CHECK(vector_add(&ip_a_G_plus_trace_H, &final_const.b, 1, {}, &ip_a_G_plus_trace_H_plus_b));
+  ICICLE_CHECK(USE_SMART_VECTOR_ADD(&ip_a_G_plus_trace_H, &final_const.b, 1, {}, &ip_a_G_plus_trace_H_plus_b));
 
   Tq zero_poly(zero());
   // Check \sum_ij a_ij G_ij + \sum_i h_ii + b == 0
@@ -329,14 +333,14 @@ void LabradorBaseVerifier::agg_const_zero_constraints()
     for (size_t l = 0; l < L; l++) {
       Zq psi_scalar = psi[psi_index(k, l)];
 
-      ICICLE_CHECK(scalar_mul_vec(
+      ICICLE_CHECK(USE_SMART_SCALAR_MUL_VEC(
         &psi_scalar, reinterpret_cast<Zq*>(temp_const[l].a.data()), r * r * d, async_config,
         reinterpret_cast<Zq*>(temp_const[l].a.data())));
     }
     ICICLE_CHECK(icicle_device_synchronize());
     // new_constraint.a[i,j] = \sum_l const_zero_constraints[l].a[i,j]
     for (size_t l = 0; l < L; l++) {
-      ICICLE_CHECK(vector_add(new_constraint.a.data(), temp_const[l].a.data(), r * r, {}, new_constraint.a.data()));
+      ICICLE_CHECK(USE_SMART_VECTOR_ADD(new_constraint.a.data(), temp_const[l].a.data(), r * r, {}, new_constraint.a.data()));
     }
 
     // Compute varphi'_i^{(k)} = sum_{l=0}^{L-1} psi^{(k)}(l) * phi'_i^{(l)} + sum_{l=0}^{255} omega^{(k)}(l) * q_{il}
@@ -348,7 +352,7 @@ void LabradorBaseVerifier::agg_const_zero_constraints()
     for (size_t l = 0; l < L; l++) {
       Zq psi_scalar = psi[psi_index(k, l)];
 
-      ICICLE_CHECK(scalar_mul_vec(
+      ICICLE_CHECK(USE_SMART_SCALAR_MUL_VEC(
         &psi_scalar, reinterpret_cast<Zq*>(temp_const[l].phi.data()), r * n * d, async_config,
         reinterpret_cast<Zq*>(temp_const[l].phi.data())));
     }
@@ -356,7 +360,7 @@ void LabradorBaseVerifier::agg_const_zero_constraints()
     // new_constraint.phi[i,:] = \sum_l const_zero_constraints[l].phi[i,:]
     for (size_t l = 0; l < L; l++) {
       ICICLE_CHECK(
-        vector_add(new_constraint.phi.data(), temp_const[l].phi.data(), r * n, {}, new_constraint.phi.data()));
+        USE_SMART_VECTOR_ADD(new_constraint.phi.data(), temp_const[l].phi.data(), r * n, {}, new_constraint.phi.data()));
     }
 
     // For each j do:
@@ -370,7 +374,7 @@ void LabradorBaseVerifier::agg_const_zero_constraints()
     batch_config.columns_batch = false;
 
     // Batch all scalar multiplications into a single call
-    ICICLE_CHECK(scalar_mul_vec(
+    ICICLE_CHECK(USE_SMART_SCALAR_MUL_VEC(
       &omega[k * JL_out], reinterpret_cast<const Zq*>(Q.data()), r * n * d, batch_config,
       reinterpret_cast<Zq*>(omega_times_Q.data())));
 
@@ -382,14 +386,14 @@ void LabradorBaseVerifier::agg_const_zero_constraints()
     sum_config.is_result_on_device = true;
 
     // This will compute the sum across all j for each (i, element) pair
-    ICICLE_CHECK(vector_sum<Zq>(
+    ICICLE_CHECK(USE_SMART_VECTOR_SUM<Zq>(
       reinterpret_cast<const Zq*>(omega_times_Q.data()), JL_out, sum_config,
       reinterpret_cast<Zq*>(reduction_result.data())));
 
-    ICICLE_CHECK(ntt(reduction_result.data(), r * n, NTTDir::kForward, {}, reduction_result.data()));
+    ICICLE_CHECK(USE_SMART_NTT(reduction_result.data(), r * n, NTTDir::kForward, {}, reduction_result.data()));
 
     // Then add to new_constraint.phi
-    ICICLE_CHECK(vector_add(new_constraint.phi.data(), reduction_result.data(), r * n, {}, new_constraint.phi.data()));
+    ICICLE_CHECK(USE_SMART_VECTOR_ADD(new_constraint.phi.data(), reduction_result.data(), r * n, {}, new_constraint.phi.data()));
 
     new_constraint.b = trs.prover_msg.b_agg[k];
 
@@ -418,7 +422,7 @@ bool LabradorBaseVerifier::part_verify()
 
   std::vector<Rq> b_agg_unhat(b_agg.size());
   // TODO: don't need complete NTT here
-  ICICLE_CHECK(ntt(b_agg.data(), b_agg.size(), NTTDir::kInverse, {}, b_agg_unhat.data()));
+  ICICLE_CHECK(USE_SMART_NTT(b_agg.data(), b_agg.size(), NTTDir::kInverse, {}, b_agg_unhat.data()));
 
   // create_transcript called in constructor - so transcript is ready to be used
 
@@ -453,10 +457,7 @@ bool LabradorBaseVerifier::part_verify()
       test_b0[k] = test_b0[k] - omega[omega_index(k, l)] * p[l];
     }
 
-    if (test_b0[k] != b_agg_unhat[k].values[0]) {
-      std::cout << "verify(): b0 test failed for " << k << std::endl;
-      return false;
-    }
+    if (test_b0[k] != b_agg_unhat[k].values[0]) { return false; }
   }
 
   // construct the final constraint correctly

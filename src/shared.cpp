@@ -1,4 +1,7 @@
 #include "shared.h"
+#include "matmul_selector.h"  // 自定义MatMul选择器
+#include "vec_ops_selector.h"  // 自定义VecOps选择器
+#include "misc_ops_selector.h"  // 自定义Misc Ops选择器
 
 bool poly_vec_eq(const PolyRing* vec1, const PolyRing* vec2, size_t size)
 {
@@ -18,7 +21,7 @@ ajtai_commitment(const std::vector<Tq>& A, size_t input_len, size_t output_len, 
   assert(batch_size * input_len == S_len);
 
   std::vector<Tq> comm(batch_size * output_len);
-  ICICLE_CHECK(matmul(S, batch_size, input_len, A.data(), input_len, output_len, {}, comm.data()));
+  ICICLE_CHECK(USE_SMART_MATMUL(S, batch_size, input_len, A.data(), input_len, output_len, {}, comm.data()));
   return comm;
 }
 
@@ -273,7 +276,7 @@ LabradorInstance prepare_recursion_instance(
     ICICLE_CHECK(preparer.copy_like_z1(new_constraint.phi.data(), &A_t[i * n]));
     // new_constraint.phi[nu+ j] = base0*new_constraint.phi[nu+ j]
     Zq base0_scalar = Zq::from(base0);
-    ICICLE_CHECK(scalar_mul_vec(
+    ICICLE_CHECK(USE_SMART_SCALAR_MUL_VEC(
       &base0_scalar, reinterpret_cast<const Zq*>(&new_constraint.phi[preparer.z1_begin_idx()]), n * d, {},
       reinterpret_cast<Zq*>(&new_constraint.phi[preparer.z1_begin_idx()])));
 
@@ -291,7 +294,7 @@ LabradorInstance prepare_recursion_instance(
     ICICLE_CHECK(icicle_copy(&t_mul[0], temp.data(), temp.size() * sizeof(Tq)));
     for (size_t j = 1; j < l1; j++) {
       // temp = base1*temp
-      scalar_mul_vec(
+      USE_SMART_SCALAR_MUL_VEC(
         &b1_zq, reinterpret_cast<Zq*>(temp.data()), temp.size() * d, {}, reinterpret_cast<Zq*>(temp.data()));
       // t_mul[j * r * kappa: ] = temp
       ICICLE_CHECK(icicle_copy(&t_mul[j * r * kappa], temp.data(), temp.size() * sizeof(Tq)));
@@ -311,7 +314,7 @@ LabradorInstance prepare_recursion_instance(
     ICICLE_CHECK(preparer.copy_like_z0(step11_constraint.phi.data(), c_times_phi.data()));
     Zq b0_zq = Zq::from(base0);
     // c_times_phi = base0 * c_times_phi
-    scalar_mul_vec(
+    USE_SMART_SCALAR_MUL_VEC(
       &b0_zq, reinterpret_cast<Zq*>(c_times_phi.data()), c_times_phi.size() * d, {},
       reinterpret_cast<Zq*>(c_times_phi.data()));
 
@@ -319,12 +322,12 @@ LabradorInstance prepare_recursion_instance(
 
     ICICLE_CHECK(matmul(challenges_hat.data(), r, 1, challenges_hat.data(), 1, r, {}, c_times_ct.data()));
     // c_times_ct = 2 * c_times_ct
-    scalar_mul_vec(
+    USE_SMART_SCALAR_MUL_VEC(
       &two, reinterpret_cast<Zq*>(c_times_ct.data()), c_times_ct.size() * d, {},
       reinterpret_cast<Zq*>(c_times_ct.data()));
     // rescale diagonal back to original
     for (size_t j = 0; j < r; j++) {
-      scalar_mul_vec(&two_inv, c_times_ct[j * r + j].values, d, {}, c_times_ct[j * r + j].values);
+      USE_SMART_SCALAR_MUL_VEC(&two_inv, c_times_ct[j * r + j].values, d, {}, c_times_ct[j * r + j].values);
     }
     // now c_times_ct[j,j] =challenges_hat[j]^2 and
     // for j!=k c_times_ct[j,k] = 2* challenges_hat[j] * challenges_hat[k]
@@ -342,7 +345,7 @@ LabradorInstance prepare_recursion_instance(
     ICICLE_CHECK(icicle_copy(&h_mul[0], temp.data(), temp.size() * sizeof(Tq)));
     for (size_t j = 1; j < l3; j++) {
       // temp = base3*temp
-      scalar_mul_vec(
+      USE_SMART_SCALAR_MUL_VEC(
         &b3_zq, reinterpret_cast<Zq*>(temp.data()), temp.size() * d, {}, reinterpret_cast<Zq*>(temp.data()));
       // h_mul[j * temp.size(): ] = temp
       ICICLE_CHECK(icicle_copy(&h_mul[j * temp.size()], temp.data(), temp.size() * sizeof(Tq)));
@@ -372,12 +375,12 @@ LabradorInstance prepare_recursion_instance(
     // final_const.a[i,i]
     std::vector<Tq> M(r * r);
     // M = final_const.a^t
-    ICICLE_CHECK(matrix_transpose(final_const.a.data(), r, r, {}, M.data()));
+    ICICLE_CHECK(USE_SMART_MATRIX_TRANSPOSE(final_const.a.data(), r, r, {}, M.data()));
     // M = final_const.a + final_const.a^t
-    ICICLE_CHECK(vector_add(final_const.a.data(), M.data(), r * r, {}, M.data()));
+    ICICLE_CHECK(USE_SMART_VECTOR_ADD(final_const.a.data(), M.data(), r * r, {}, M.data()));
     // rescale diagonal back to original
     for (size_t j = 0; j < r; j++) {
-      scalar_mul_vec(&two_inv, M[j * r + j].values, d, {}, M[j * r + j].values);
+      USE_SMART_SCALAR_MUL_VEC(&two_inv, M[j * r + j].values, d, {}, M[j * r + j].values);
     }
     // extract the symmetric part of M as vector a_symm
     std::vector<Tq> a_symm = extract_symm_part(M.data(), r);
@@ -388,7 +391,7 @@ LabradorInstance prepare_recursion_instance(
     ICICLE_CHECK(icicle_copy(&g_mul[0], a_symm.data(), a_symm.size() * sizeof(Tq)));
     for (size_t j = 1; j < l2; j++) {
       // a_symm = base2 * a_symm
-      scalar_mul_vec(
+      USE_SMART_SCALAR_MUL_VEC(
         &b2_zq, reinterpret_cast<Zq*>(a_symm.data()), a_symm.size() * d, {}, reinterpret_cast<Zq*>(a_symm.data()));
       // g_mul[j * r * kappa: ] = a_symm
       ICICLE_CHECK(icicle_copy(&g_mul[j * a_symm.size()], a_symm.data(), a_symm.size() * sizeof(Tq)));
@@ -414,7 +417,7 @@ LabradorInstance prepare_recursion_instance(
     ICICLE_CHECK(icicle_copy(&h_mul[0], symm_I.data(), symm_I.size() * sizeof(Tq)));
     for (size_t j = 1; j < l3; j++) {
       // symm_I = base3*symm_I
-      scalar_mul_vec(
+      USE_SMART_SCALAR_MUL_VEC(
         &b3_zq, reinterpret_cast<Zq*>(symm_I.data()), symm_I.size() * d, {}, reinterpret_cast<Zq*>(symm_I.data()));
       // h_mul[j * symm_I.size(): ] = symm_I
       ICICLE_CHECK(icicle_copy(&h_mul[j * symm_I.size()], symm_I.data(), symm_I.size() * sizeof(Tq)));
@@ -452,7 +455,7 @@ LabradorInstance prepare_recursion_instance(
     ICICLE_CHECK(icicle_copy(&g_mul[0], temp.data(), temp.size() * sizeof(Tq)));
     for (size_t j = 1; j < l2; j++) {
       // temp = base2 * temp
-      scalar_mul_vec(
+      USE_SMART_SCALAR_MUL_VEC(
         &b2_zq, reinterpret_cast<Zq*>(temp.data()), temp.size() * d, {}, reinterpret_cast<Zq*>(temp.data()));
       // g_mul2[j * temp.size(): ] = temp
       ICICLE_CHECK(icicle_copy(&g_mul[j * temp.size()], temp.data(), temp.size() * sizeof(Tq)));

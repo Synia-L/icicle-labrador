@@ -3,7 +3,11 @@
 #include "icicle/utils/log.h"
 #include "ntt_utils.h"
 #include "ntt_data.h"
+#include "custom_ntt_cpu_trace.h"  // Stub version - all functions are no-ops
 #include <cstdint>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 using namespace icicle;
 namespace ntt_cpu {
@@ -1201,6 +1205,23 @@ namespace ntt_cpu {
       index_in_mem[i] = ntt_data->is_parallel ? stride * idx_in_mem(ntt_task_coordinates, i) : stride * i;
     }
 
+    using TraceStorage = std::decay_t<decltype(std::declval<S>().limbs_storage)>;
+    constexpr uint32_t limb_count = TraceStorage::LC;
+
+    const bool trace_enabled =
+      custom_ntt_cpu_trace_should_capture(ntt_data->logn, ntt_data->direction == NTTDir::kInverse);
+    const bool trace_this_task = trace_enabled && !ntt_data->config.columns_batch &&
+                                 ntt_task_coordinates.hierarchy_1_subntt_idx == 0 &&
+                                 ntt_task_coordinates.hierarchy_0_block_idx == 0 &&
+                                 ntt_task_coordinates.hierarchy_0_subntt_idx == 0;
+    uint32_t trace_stage = 0;
+    std::vector<uint32_t> trace_buffer;
+    if (trace_this_task) {
+      trace_buffer.resize(static_cast<std::size_t>(subntt_size) * limb_count);
+      custom_ntt_cpu_trace_set_params(CpuNttDomain<S>::s_ntt_domain.get_max_size(), subntt_size_log);
+      custom_ntt_cpu_trace_capture_index_map(index_in_mem.data(), subntt_size);
+    }
+
     for (uint32_t batch = 0; batch < ntt_data->config.batch_size; ++batch) {
       E* current_elements =
         ntt_data->config.columns_batch ? subntt_elements + batch : subntt_elements + batch * (ntt_data->size);
@@ -1225,6 +1246,17 @@ namespace ntt_cpu {
             current_elements[u_mem_idx] = u + v;
             current_elements[v_mem_idx] = u - v;
           }
+        }
+
+        if (trace_this_task && batch == 0) {
+          for (uint32_t idx = 0; idx < subntt_size; ++idx) {
+            uint64_t mem_idx = index_in_mem[idx];
+            const E& elem = current_elements[mem_idx];
+            for (uint32_t limb = 0; limb < limb_count; ++limb) {
+              trace_buffer[idx * limb_count + limb] = elem.limbs_storage.limbs[limb];
+            }
+          }
+          custom_ntt_cpu_trace_stage_dump(trace_stage++, trace_buffer.data(), subntt_size, limb_count);
         }
       }
 

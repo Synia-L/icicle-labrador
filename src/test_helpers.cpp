@@ -1,4 +1,7 @@
 #include "test_helpers.h"
+#include "ntt_selector.h"  // 添加自定义NTT选择器
+#include "matmul_selector.h"  // 添加自定义MatMul选择器
+#include "vec_ops_selector.h"  // 添加自定义VecOps选择器
 
 // print a polynomial
 void print_vec(const Zq* vec, size_t len, const std::string& name = "")
@@ -46,26 +49,26 @@ std::vector<EqualityInstance> create_rand_eq_inst(size_t n, size_t r, const std:
 
   // S_hat = NTT(S)
   std::vector<Tq> S_hat(r * n);
-  ICICLE_CHECK(ntt(S.data(), r * n, NTTDir::kForward, {}, S_hat.data()));
+  ICICLE_CHECK(USE_SMART_NTT(S.data(), r * n, NTTDir::kForward, {}, S_hat.data()));
 
   std::vector<Tq> S_hat_transposed(n * r);
   ICICLE_CHECK(matrix_transpose<Tq>(S_hat.data(), r, n, {}, S_hat_transposed.data()));
 
   // G_hat = S@S^t
   std::vector<Tq> G_hat(r * r);
-  ICICLE_CHECK(matmul(S_hat.data(), r, n, S_hat_transposed.data(), n, r, {}, G_hat.data()));
+  ICICLE_CHECK(USE_SMART_MATMUL(S_hat.data(), r, n, S_hat_transposed.data(), n, r, {}, G_hat.data()));
 
   std::vector<Tq> G_A_inner_prod(num_const), phi_S_inner_prod(num_const);
   // G_A_inner_prod = A@G_hat
-  ICICLE_CHECK(matmul(A.data(), num_const, r * r, G_hat.data(), r * r, 1, {}, G_A_inner_prod.data()));
+  ICICLE_CHECK(USE_SMART_MATMUL(A.data(), num_const, r * r, G_hat.data(), r * r, 1, {}, G_A_inner_prod.data()));
   // phi_S_inner_prod = Phi@S
-  ICICLE_CHECK(matmul(Phi.data(), num_const, r * n, S_hat.data(), r * n, 1, {}, phi_S_inner_prod.data()));
+  ICICLE_CHECK(USE_SMART_MATMUL(Phi.data(), num_const, r * n, S_hat.data(), r * n, 1, {}, phi_S_inner_prod.data()));
 
   // b = -(<G, a> + <S, phi>)
-  ICICLE_CHECK(vector_add(G_A_inner_prod.data(), phi_S_inner_prod.data(), num_const, {}, b.data()));
+  ICICLE_CHECK(USE_SMART_VECTOR_ADD(G_A_inner_prod.data(), phi_S_inner_prod.data(), num_const, {}, b.data()));
   Zq minus_1 = Zq::from(1).neg();
   ICICLE_CHECK(
-    scalar_mul_vec(&minus_1, reinterpret_cast<Zq*>(b.data()), Rq::d * num_const, {}, reinterpret_cast<Zq*>(b.data())));
+    USE_SMART_SCALAR_MUL_VEC(&minus_1, reinterpret_cast<Zq*>(b.data()), Rq::d * num_const, {}, reinterpret_cast<Zq*>(b.data())));
 
   std::vector<EqualityInstance> eq_inst;
 
@@ -93,7 +96,7 @@ create_rand_const_zero_inst(size_t n, size_t r, const std::vector<Rq>& S, size_t
     // For b only set const coeff equal to the one in eq_inst[i].b
     // eq_inst_b_unhat = INTT(eq_inst[i].b)
     Rq eq_inst_b_unhat;
-    ICICLE_CHECK(ntt(&eq_inst[i].b, 1, NTTDir::kInverse, {}, &eq_inst_b_unhat));
+    ICICLE_CHECK(USE_SMART_NTT(&eq_inst[i].b, 1, NTTDir::kInverse, {}, &eq_inst_b_unhat));
 
     // set new_cz_inst.b equal to const coeff of eq_inst_b
     new_cz_inst.b = eq_inst_b_unhat.values[0];
@@ -114,17 +117,17 @@ bool witness_legit_eq_all_ntt(const EqualityInstance& eq_inst, const std::vector
 
   // G_hat = S@S^t
   std::vector<Tq> G_hat(r * r);
-  ICICLE_CHECK(matmul(S_hat.data(), r, n, S_hat_transposed.data(), n, r, {}, G_hat.data()));
+  ICICLE_CHECK(USE_SMART_MATMUL(S_hat.data(), r, n, S_hat_transposed.data(), n, r, {}, G_hat.data()));
 
   Tq G_A_inner_prod, phi_S_inner_prod, eval_hat;
   // G_A_inner_prod = <G, a>
-  ICICLE_CHECK(matmul(G_hat.data(), 1, r * r, eq_inst.a.data(), r * r, 1, {}, &G_A_inner_prod));
+  ICICLE_CHECK(USE_SMART_MATMUL(G_hat.data(), 1, r * r, eq_inst.a.data(), r * r, 1, {}, &G_A_inner_prod));
   // phi_S_inner_prod = <S, phi>
-  ICICLE_CHECK(matmul(S_hat.data(), 1, r * n, eq_inst.phi.data(), r * n, 1, {}, &phi_S_inner_prod));
+  ICICLE_CHECK(USE_SMART_MATMUL(S_hat.data(), 1, r * n, eq_inst.phi.data(), r * n, 1, {}, &phi_S_inner_prod));
 
   // eval_hat = b + (<G, a> + <S, phi>)
-  ICICLE_CHECK(vector_add(G_A_inner_prod.values, phi_S_inner_prod.values, Rq::d, {}, eval_hat.values));
-  ICICLE_CHECK(vector_add(eval_hat.values, eq_inst.b.values, Rq::d, {}, eval_hat.values));
+  ICICLE_CHECK(USE_SMART_VECTOR_ADD(G_A_inner_prod.values, phi_S_inner_prod.values, Rq::d, {}, eval_hat.values));
+  ICICLE_CHECK(USE_SMART_VECTOR_ADD(eval_hat.values, eq_inst.b.values, Rq::d, {}, eval_hat.values));
 
   // print_poly(eval_hat, "eval_hat");
   for (size_t i = 0; i < Tq::d; i++) {
@@ -142,7 +145,7 @@ bool witness_legit_eq(const EqualityInstance& eq_inst, const std::vector<Rq>& S)
   assert(S.size() == r * n);
   // S_hat = NTT(S)
   std::vector<Tq> S_hat(r * n);
-  ICICLE_CHECK(ntt(S.data(), r * n, NTTDir::kForward, {}, S_hat.data()));
+  ICICLE_CHECK(USE_SMART_NTT(S.data(), r * n, NTTDir::kForward, {}, S_hat.data()));
 
   return witness_legit_eq_all_ntt(eq_inst, S_hat);
 }
@@ -159,20 +162,20 @@ bool witness_legit_const_zero_all_ntt(const ConstZeroInstance& cz_inst, const st
 
   // G_hat = S@S^t
   std::vector<Tq> G_hat(r * r);
-  ICICLE_CHECK(matmul(S_hat.data(), r, n, S_hat_transposed.data(), n, r, {}, G_hat.data()));
+  ICICLE_CHECK(USE_SMART_MATMUL(S_hat.data(), r, n, S_hat_transposed.data(), n, r, {}, G_hat.data()));
 
   Tq G_A_inner_prod, phi_S_inner_prod, eval_hat;
   // G_A_inner_prod = <G, a>
-  ICICLE_CHECK(matmul(G_hat.data(), 1, r * r, cz_inst.a.data(), r * r, 1, {}, &G_A_inner_prod));
+  ICICLE_CHECK(USE_SMART_MATMUL(G_hat.data(), 1, r * r, cz_inst.a.data(), r * r, 1, {}, &G_A_inner_prod));
   // phi_S_inner_prod = <S, phi>
-  ICICLE_CHECK(matmul(S_hat.data(), 1, r * n, cz_inst.phi.data(), r * n, 1, {}, &phi_S_inner_prod));
+  ICICLE_CHECK(USE_SMART_MATMUL(S_hat.data(), 1, r * n, cz_inst.phi.data(), r * n, 1, {}, &phi_S_inner_prod));
 
   // eval_hat = (<G, a> + <S, phi>)
-  ICICLE_CHECK(vector_add(G_A_inner_prod.values, phi_S_inner_prod.values, Rq::d, {}, eval_hat.values));
+  ICICLE_CHECK(USE_SMART_VECTOR_ADD(G_A_inner_prod.values, phi_S_inner_prod.values, Rq::d, {}, eval_hat.values));
 
   // take INTT for eval_hat
   Rq eval;
-  ICICLE_CHECK(ntt(&eval_hat, 1, NTTDir::kInverse, {}, &eval));
+  ICICLE_CHECK(USE_SMART_NTT(&eval_hat, 1, NTTDir::kInverse, {}, &eval));
 
   // print_poly(eval, "cz_eval");
   if (eval.values[0] + cz_inst.b == Zq::zero()) {
@@ -190,7 +193,7 @@ bool witness_legit_const_zero(const ConstZeroInstance& cz_inst, const std::vecto
 
   // S_hat = NTT(S)
   std::vector<Tq> S_hat(r * n);
-  ICICLE_CHECK(ntt(S.data(), r * n, NTTDir::kForward, {}, S_hat.data()));
+  ICICLE_CHECK(USE_SMART_NTT(S.data(), r * n, NTTDir::kForward, {}, S_hat.data()));
 
   return witness_legit_const_zero_all_ntt(cz_inst, S_hat);
 }
@@ -201,7 +204,7 @@ bool lab_witness_legit(const LabradorInstance& lab_inst, const std::vector<Rq>& 
   size_t n = lab_inst.param.n;
   // S_hat = NTT(S)
   std::vector<Tq> S_hat(r * n);
-  ICICLE_CHECK(ntt(S.data(), r * n, NTTDir::kForward, {}, S_hat.data()));
+  ICICLE_CHECK(USE_SMART_NTT(S.data(), r * n, NTTDir::kForward, {}, S_hat.data()));
 
   for (auto& eq_inst : lab_inst.equality_constraints) {
     if (!witness_legit_eq_all_ntt(eq_inst, S_hat)) { return false; }

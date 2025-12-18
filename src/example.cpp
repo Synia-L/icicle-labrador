@@ -20,6 +20,25 @@
 
 using namespace icicle::labrador;
 
+// 全局标志：是否使用自定义NTT
+bool g_use_custom_ntt = false;
+
+// 全局标志：是否使用自定义MatMul
+bool g_use_custom_matmul = false;
+
+// 全局标志：是否使用自定义VecOps
+bool g_use_custom_vec_ops = false;
+
+// 全局标志：是否使用自定义Misc Ops (decompose/recompose/jl_projection/matrix_transpose)
+bool g_use_custom_misc_ops = false;
+
+// 声明自定义NTT函数
+extern "C" {
+  void custom_ntt_init_cuda();
+  void custom_ntt_init_cuda_with_roots(const uint32_t* psi_limbs, const uint32_t* omega_limbs);
+  void custom_ntt_release_cuda();
+}
+
 void prover_verifier_trace()
 {
   const int64_t q = get_q<Zq>();
@@ -96,7 +115,80 @@ void prover_verifier_trace()
 int main(int argc, char* argv[])
 {
   ICICLE_LOG_INFO << "Labrador example";
+  
+  // 1. 加载默认后端
   try_load_and_set_backend_device(argc, argv);
+
+  // 2. 如果使用CUDA，初始化自定义NTT/MatMul/VecOps/MiscOps
+  if (argc > 1 && std::string(argv[1]) == "CUDA") {
+    // 检查是否启用自定义实现
+    for (int i = 2; i < argc; ++i) {
+      if (std::string(argv[i]) == "--custom-ntt") {
+        g_use_custom_ntt = true;
+      }
+      if (std::string(argv[i]) == "--custom-matmul") {
+        g_use_custom_matmul = true;
+      }
+      if (std::string(argv[i]) == "--custom-vec-ops") {
+        g_use_custom_vec_ops = true;
+      }
+      if (std::string(argv[i]) == "--custom-misc-ops") {
+        g_use_custom_misc_ops = true;
+      }
+    }
+    
+    if (g_use_custom_ntt || g_use_custom_matmul || g_use_custom_vec_ops || g_use_custom_misc_ops) {
+      if (g_use_custom_ntt) {
+        std::cout << "CUSTOM CUDA NTT ENABLED!" << std::endl;
+        std::cout << "Using Negacyclic NTT with psi from ICICLE domain\n" << std::endl;
+      }
+      if (g_use_custom_matmul) {
+        std::cout << "CUSTOM CUDA MATMUL ENABLED!" << std::endl;
+        std::cout << "Using custom matrix multiplication kernels\n" << std::endl;
+      }
+      if (g_use_custom_vec_ops) {
+        std::cout << "CUSTOM CUDA VEC OPS ENABLED!" << std::endl;
+        std::cout << "Using custom vector operations kernels\n" << std::endl;
+      }
+      if (g_use_custom_misc_ops) {
+        std::cout << "CUSTOM CUDA MISC OPS ENABLED!" << std::endl;
+        std::cout << "Using custom decompose/recompose/jl_projection/matrix_transpose kernels\n" << std::endl;
+      }
+    }
+    
+    if (g_use_custom_ntt) {
+      
+      // 首先初始化 ICICLE 的 NTT domain
+      // 这会自动计算并缓存 twiddle 因子
+      using namespace icicle;
+      using namespace icicle::labrador;
+      
+      // 获取 128次单位根作为 primitive root
+      Zq psi = Zq::omega(7);  // omega(7) = 2^7 = 128 次单位根
+      
+      std::cout << "    Initializing ICICLE NTT domain with psi..." << std::endl;
+      ICICLE_CHECK(ntt_init_domain(psi, NTTInitDomainConfig{}));
+      
+          std::cout << "    Got psi (128th root): " << psi << std::endl;
+
+          // 获取 64次单位根作为 NTT 的基础 omega
+          Zq omega;
+          eIcicleError rou_err = get_root_of_unity_from_domain(6, &omega);  // log2(64) = 6          
+          if (rou_err == eIcicleError::SUCCESS) {
+            std::cout << "    Got omega (64th root): " << omega << std::endl;
+          } else {
+            std::cerr << "    Warning: Could not get 64th root from domain, computing psi^2" << std::endl;
+            omega = psi * psi;  // psi^2 是 64次单位根
+            std::cout << "    Computed omega (64th root): " << omega << std::endl;
+          }
+          
+          // 传递 psi (用于 coset) 和 omega (用于 NTT twiddles) 给自定义 NTT 初始化
+          custom_ntt_init_cuda_with_roots(psi.limbs_storage.limbs, omega.limbs_storage.limbs);
+      
+    } else {
+      std::cout << "\nUsing default ICICLE CUDA backend\n" << std::endl;
+    }
+  }
 
   // I. Use the following code for examining program trace:
   // prover_verifier_trace();

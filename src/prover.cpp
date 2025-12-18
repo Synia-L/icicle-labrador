@@ -1,4 +1,8 @@
 #include "prover.h"
+#include "ntt_selector.h"  // 自定义NTT选择器
+#include "matmul_selector.h"  // 自定义MatMul选择器
+#include "vec_ops_selector.h"  // 自定义VecOps选择器
+#include "misc_ops_selector.h"  // 自定义Misc Ops选择器
 #include <cassert>
 #include <chrono>
 
@@ -15,7 +19,7 @@ std::pair<size_t, std::vector<Zq>> LabradorBaseProver::select_valid_jl_proj(std:
   while (true) {
     jl_seed.push_back(std::byte(JL_i));
     // create JL projection: P*(s_1, s_2, ..., s_r)
-    ICICLE_CHECK(icicle::labrador::jl_projection(
+    ICICLE_CHECK(USE_SMART_JL_PROJECTION(
       reinterpret_cast<const Zq*>(S.data()), n * r * d, jl_seed.data(), jl_seed.size(), {}, p.data(), JL_out));
     // check norm
     bool JL_check = true;
@@ -129,7 +133,7 @@ std::vector<Tq> LabradorBaseProver::agg_const_zero_constraints(
     for (size_t l = 0; l < L; l++) {
       Zq psi_scalar = psi[psi_index(k, l)];
 
-      ICICLE_CHECK(scalar_mul_vec(
+      ICICLE_CHECK(USE_SMART_SCALAR_MUL_VEC(
         &psi_scalar, reinterpret_cast<Zq*>(temp_const[l].a.data()), r * r * d, async_config,
         reinterpret_cast<Zq*>(temp_const[l].a.data())));
     }
@@ -137,7 +141,7 @@ std::vector<Tq> LabradorBaseProver::agg_const_zero_constraints(
     log_step("\t\t psi*a");
     // new_constraint.a[i,j] = \sum_l const_zero_constraints[l].a[i,j]
     for (size_t l = 0; l < L; l++) {
-      ICICLE_CHECK(vector_add(new_constraint.a.data(), temp_const[l].a.data(), r * r, {}, new_constraint.a.data()));
+      ICICLE_CHECK(USE_SMART_VECTOR_ADD(new_constraint.a.data(), temp_const[l].a.data(), r * r, {}, new_constraint.a.data()));
     }
     log_step("\t\t sum(a)");
 
@@ -150,7 +154,7 @@ std::vector<Tq> LabradorBaseProver::agg_const_zero_constraints(
     for (size_t l = 0; l < L; l++) {
       Zq psi_scalar = psi[psi_index(k, l)];
 
-      ICICLE_CHECK(scalar_mul_vec(
+      ICICLE_CHECK(USE_SMART_SCALAR_MUL_VEC(
         &psi_scalar, reinterpret_cast<Zq*>(temp_const[l].phi.data()), r * n * d, async_config,
         reinterpret_cast<Zq*>(temp_const[l].phi.data())));
     }
@@ -159,7 +163,7 @@ std::vector<Tq> LabradorBaseProver::agg_const_zero_constraints(
     // new_constraint.phi[i,:] = \sum_l const_zero_constraints[l].phi[i,:]
     for (size_t l = 0; l < L; l++) {
       ICICLE_CHECK(
-        vector_add(new_constraint.phi.data(), temp_const[l].phi.data(), r * n, {}, new_constraint.phi.data()));
+        USE_SMART_VECTOR_ADD(new_constraint.phi.data(), temp_const[l].phi.data(), r * n, {}, new_constraint.phi.data()));
     }
     log_step("\t\t sum(phi)");
 
@@ -174,7 +178,7 @@ std::vector<Tq> LabradorBaseProver::agg_const_zero_constraints(
     batch_config.columns_batch = false;
 
     // Batch all scalar multiplications into a single call
-    ICICLE_CHECK(scalar_mul_vec(
+    ICICLE_CHECK(USE_SMART_SCALAR_MUL_VEC(
       &omega[k * JL_out], reinterpret_cast<const Zq*>(Q.data()), r * n * d, batch_config,
       reinterpret_cast<Zq*>(omega_times_Q.data())));
     log_step("\t\t omega*Q");
@@ -187,31 +191,31 @@ std::vector<Tq> LabradorBaseProver::agg_const_zero_constraints(
     sum_config.is_result_on_device = true;
 
     // This will compute the sum across all j for each (i, element) pair
-    ICICLE_CHECK(vector_sum<Zq>(
+    ICICLE_CHECK(USE_SMART_VECTOR_SUM<Zq>(
       reinterpret_cast<const Zq*>(omega_times_Q.data()), JL_out, sum_config,
       reinterpret_cast<Zq*>(reduction_result.data())));
     log_step("\t\t sum(omega_times_Q)");
 
-    ICICLE_CHECK(ntt(reduction_result.data(), r * n, NTTDir::kForward, {}, reduction_result.data()));
+    ICICLE_CHECK(USE_SMART_NTT(reduction_result.data(), r * n, NTTDir::kForward, {}, reduction_result.data()));
     log_step("\t\t ntt(reduction_result)");
 
     // Then add to new_constraint.phi
-    ICICLE_CHECK(vector_add(new_constraint.phi.data(), reduction_result.data(), r * n, {}, new_constraint.phi.data()));
+    ICICLE_CHECK(USE_SMART_VECTOR_ADD(new_constraint.phi.data(), reduction_result.data(), r * n, {}, new_constraint.phi.data()));
     log_step("\t\t add to phi");
 
     // Compute B^{(k)} = sum_{ij} a''_{ij}^{(k)}  * g_{ij} + sum_i <phi'_i^{(k)}, s_i>
     Tq G_A_inner_prod, phi_S_inner_prod;
     // G_A_inner_prod = <G, a>
-    ICICLE_CHECK(matmul(G_hat.data(), 1, r * r, new_constraint.a.data(), r * r, 1, {}, &G_A_inner_prod));
+    ICICLE_CHECK(USE_SMART_MATMUL(G_hat.data(), 1, r * r, new_constraint.a.data(), r * r, 1, {}, &G_A_inner_prod));
     log_step("\t\t <G, a>");
     // phi_S_inner_prod = <S, phi>
-    ICICLE_CHECK(matmul(S_hat.data(), 1, r * n, new_constraint.phi.data(), r * n, 1, {}, &phi_S_inner_prod));
+    ICICLE_CHECK(USE_SMART_MATMUL(S_hat.data(), 1, r * n, new_constraint.phi.data(), r * n, 1, {}, &phi_S_inner_prod));
     log_step("\t\t <S, phi>");
     // b = -(<G, a> + <S, phi>)
-    ICICLE_CHECK(vector_add(G_A_inner_prod.values, phi_S_inner_prod.values, d, {}, new_constraint.b.values));
+    ICICLE_CHECK(USE_SMART_VECTOR_ADD(G_A_inner_prod.values, phi_S_inner_prod.values, d, {}, new_constraint.b.values));
     log_step("\t\t b = (<G, a> + <S, phi>)");
     Zq minus_1 = Zq::from(1).neg();
-    ICICLE_CHECK(scalar_mul_vec(&minus_1, new_constraint.b.values, d, {}, new_constraint.b.values));
+    ICICLE_CHECK(USE_SMART_SCALAR_MUL_VEC(&minus_1, new_constraint.b.values, d, {}, new_constraint.b.values));
     log_step("\t\t b = -b");
 
     if (CONSISTENCY_CHECKS) {
@@ -228,7 +232,7 @@ std::vector<Tq> LabradorBaseProver::agg_const_zero_constraints(
       }
 
       Rq b_rq;
-      ICICLE_CHECK(ntt(&new_constraint.b, 1, NTTDir::kInverse, {}, &b_rq));
+      ICICLE_CHECK(USE_SMART_NTT(&new_constraint.b, 1, NTTDir::kInverse, {}, &b_rq));
 
       if (!witness_legit_const_zero({r, n, new_constraint.a, new_constraint.phi, verif_test_b0[k]}, S)) {
         std::cout << "\tVerif test constraint " << k << " failed\n";
@@ -275,8 +279,11 @@ std::pair<LabradorBaseCaseProof, PartialTranscript> LabradorBaseProver::base_cas
 
   // Step 2: Convert S to the NTT Domain
   std::vector<Tq> S_hat(r * n);
+  
   // Perform negacyclic NTT on the witness S
-  ICICLE_CHECK(ntt(S.data(), r * n, NTTDir::kForward, {}, S_hat.data()));
+  // 使用智能NTT选择器（会根据g_use_custom_ntt标志自动选择）
+  ICICLE_CHECK(USE_SMART_NTT(S.data(), r * n, NTTDir::kForward, {}, S_hat.data()));
+  
   log_step("Step 2 completed: NTT conversion");
 
   // Step 3: S@A = T
@@ -290,14 +297,14 @@ std::pair<LabradorBaseCaseProof, PartialTranscript> LabradorBaseProver::base_cas
   // Step 4: Convert T_hat to Rq
   std::vector<Rq> T(r * kappa);
   // Perform negacyclic INTT
-  ICICLE_CHECK(ntt(T_hat.data(), r * kappa, NTTDir::kInverse, {}, T.data()));
+  ICICLE_CHECK(USE_SMART_NTT(T_hat.data(), r * kappa, NTTDir::kInverse, {}, T.data()));
   log_step("Step 4 completed: INTT conversion of T_hat");
 
   // Step 5: Decompose T to T_tilde
   size_t base1 = lab_inst.param.base1;
   size_t l1 = icicle::balanced_decomposition::compute_nof_digits<Zq>(base1);
   std::vector<Rq> T_tilde(l1 * r * kappa);
-  ICICLE_CHECK(decompose(T.data(), r * kappa, base1, {}, T_tilde.data(), T_tilde.size()));
+  ICICLE_CHECK(USE_SMART_DECOMPOSE(T.data(), r * kappa, base1, {}, T_tilde.data(), T_tilde.size()));
   log_step("Step 5 completed: Decomposed T to T_tilde");
 
   // Step 6: Compute g
@@ -305,13 +312,13 @@ std::pair<LabradorBaseCaseProof, PartialTranscript> LabradorBaseProver::base_cas
   ICICLE_CHECK(matrix_transpose<Tq>(S_hat.data(), r, n, {}, S_hat_transposed.data()));
 
   std::vector<Tq> G_hat(r * r);
-  ICICLE_CHECK(matmul(S_hat.data(), r, n, S_hat_transposed.data(), n, r, {}, G_hat.data()));
+  ICICLE_CHECK(USE_SMART_MATMUL(S_hat.data(), r, n, S_hat_transposed.data(), n, r, {}, G_hat.data()));
 
   std::vector<Tq> g_hat = extract_symm_part(G_hat.data(), r);
   size_t r_choose_2 = (r * (r + 1)) / 2;
   std::vector<Rq> g(r_choose_2);
 
-  ICICLE_CHECK(ntt(g_hat.data(), r_choose_2, NTTDir::kInverse, {}, g.data()));
+  ICICLE_CHECK(USE_SMART_NTT(g_hat.data(), r_choose_2, NTTDir::kInverse, {}, g.data()));
   log_step("Step 6 completed: Computed g");
 
   // Step 7: Decompose g to g_tilde
@@ -319,7 +326,7 @@ std::pair<LabradorBaseCaseProof, PartialTranscript> LabradorBaseProver::base_cas
   // TODO: Take advantage of g being small and truncate upper limbs
   size_t l2 = icicle::balanced_decomposition::compute_nof_digits<Zq>(base2);
   std::vector<Rq> g_tilde(l2 * g.size());
-  ICICLE_CHECK(decompose(g.data(), g.size(), base2, {}, g_tilde.data(), g_tilde.size()));
+  ICICLE_CHECK(USE_SMART_DECOMPOSE(g.data(), g.size(), base2, {}, g_tilde.data(), g_tilde.size()));
   log_step("Step 7 completed: Decomposed g to g_tilde");
 
   // Step 8: u1 = B@T_tilde + C@g_tilde
@@ -330,9 +337,9 @@ std::pair<LabradorBaseCaseProof, PartialTranscript> LabradorBaseProver::base_cas
   // compute NTTs for T_tilde, g_tilde
   std::vector<Tq> T_tilde_hat(T_tilde.size()), g_tilde_hat(g_tilde.size());
   log_step("\t memory alloc");
-  ICICLE_CHECK(ntt(T_tilde.data(), T_tilde.size(), NTTDir::kForward, {}, T_tilde_hat.data()));
+  ICICLE_CHECK(USE_SMART_NTT(T_tilde.data(), T_tilde.size(), NTTDir::kForward, {}, T_tilde_hat.data()));
   log_step("\t T_tilde NTT completed");
-  ICICLE_CHECK(ntt(g_tilde.data(), g_tilde.size(), NTTDir::kForward, {}, g_tilde_hat.data()));
+  ICICLE_CHECK(USE_SMART_NTT(g_tilde.data(), g_tilde.size(), NTTDir::kForward, {}, g_tilde_hat.data()));
   log_step("\t g_tilde NTT completed");
   // v1 = B @ T_tilde
   std::vector<Tq> v1 = ajtai_commitment(B, T_tilde_hat.size(), kappa1, T_tilde_hat.data(), T_tilde_hat.size());
@@ -342,7 +349,7 @@ std::pair<LabradorBaseCaseProof, PartialTranscript> LabradorBaseProver::base_cas
   log_step("\t Ajtai commit to g_tilde");
 
   std::vector<Tq> u1(kappa1);
-  vector_add(v1.data(), v2.data(), kappa1, {}, u1.data());
+  USE_SMART_VECTOR_ADD(v1.data(), v2.data(), kappa1, {}, u1.data());
   log_step("Step 8 completed: Computed u1");
 
   // Step 9: Derive seed1 using the oracle and the bytes of u1
@@ -448,12 +455,12 @@ std::pair<LabradorBaseCaseProof, PartialTranscript> LabradorBaseProver::base_cas
 
   // Compute Phi @ S^T using the transposed S_hat
   std::vector<Tq> Phi_times_St_hat(r * r);
-  ICICLE_CHECK(matmul(phi_final, r, n, S_hat_transposed.data(), n, r, {}, Phi_times_St_hat.data()));
+  ICICLE_CHECK(USE_SMART_MATMUL(phi_final, r, n, S_hat_transposed.data(), n, r, {}, Phi_times_St_hat.data()));
 
   // Convert back to Rq domain
   std::vector<Rq> H(r * r), Phi_times_St_transposed(r * r);
   // H = Phi @ S^t
-  ICICLE_CHECK(ntt(Phi_times_St_hat.data(), r * r, NTTDir::kInverse, {}, H.data()));
+  ICICLE_CHECK(USE_SMART_NTT(Phi_times_St_hat.data(), r * r, NTTDir::kInverse, {}, H.data()));
   // transpose matrix
   ICICLE_CHECK(matrix_transpose<Tq>(H.data(), r, r, {}, Phi_times_St_transposed.data()));
 
@@ -461,10 +468,10 @@ std::pair<LabradorBaseCaseProof, PartialTranscript> LabradorBaseProver::base_cas
   Zq two_inv = Zq::from(2).inverse(); // 2^{-1} in Z_q
 
   // H = H + Phi_times_St_transposed = Phi@S^t + Phi_times_St_transposed
-  ICICLE_CHECK(vector_add(H.data(), Phi_times_St_transposed.data(), r * r, {}, H.data()));
+  ICICLE_CHECK(USE_SMART_VECTOR_ADD(H.data(), Phi_times_St_transposed.data(), r * r, {}, H.data()));
   // H = 1/2 * H
   ICICLE_CHECK(
-    scalar_mul_vec(&two_inv, reinterpret_cast<Zq*>(H.data()), r * r * d, {}, reinterpret_cast<Zq*>(H.data())));
+    USE_SMART_SCALAR_MUL_VEC(&two_inv, reinterpret_cast<Zq*>(H.data()), r * r * d, {}, reinterpret_cast<Zq*>(H.data())));
 
   std::vector<Rq> h = extract_symm_part(H.data(), r);
   log_step("Step 17 completed: Computed h vector");
@@ -474,9 +481,9 @@ std::pair<LabradorBaseCaseProof, PartialTranscript> LabradorBaseProver::base_cas
   size_t l3 = icicle::balanced_decomposition::compute_nof_digits<Zq>(base3);
 
   std::vector<Rq> h_tilde(l3 * h.size());
-  ICICLE_CHECK(decompose(h.data(), h.size(), base3, {}, h_tilde.data(), h_tilde.size()));
+  ICICLE_CHECK(USE_SMART_DECOMPOSE(h.data(), h.size(), base3, {}, h_tilde.data(), h_tilde.size()));
   std::vector<Tq> h_tilde_hat(h_tilde.size());
-  ICICLE_CHECK(ntt(h_tilde.data(), h_tilde.size(), NTTDir::kForward, {}, h_tilde_hat.data()));
+  ICICLE_CHECK(USE_SMART_NTT(h_tilde.data(), h_tilde.size(), NTTDir::kForward, {}, h_tilde_hat.data()));
   log_step("Step 18 completed: Decomposed h to H_tilde");
 
   // Step 19: Commit to h_tilde
@@ -503,18 +510,22 @@ std::pair<LabradorBaseCaseProof, PartialTranscript> LabradorBaseProver::base_cas
   std::vector<Rq> challenge = sample_low_norm_challenges(n, r, seed4.data(), seed4.size());
 
   std::vector<Tq> challenges_hat(r);
-  ICICLE_CHECK(ntt(challenge.data(), challenge.size(), NTTDir::kForward, {}, challenges_hat.data()));
+  ICICLE_CHECK(USE_SMART_NTT(challenge.data(), challenge.size(), NTTDir::kForward, {}, challenges_hat.data()));
   trs.challenges_hat = challenges_hat;
   log_step("Step 21 completed: Sampled challenges");
 
   // Step 22: Compute z_hat[:] = \sum_i c_i * S[i,:] = [c1 c2 ... cr] @ S
   std::vector<Tq> z_hat(n);
-  ICICLE_CHECK(matmul(challenges_hat.data(), 1, r, S_hat.data(), r, n, {}, z_hat.data()));
+  ICICLE_CHECK(USE_SMART_MATMUL(challenges_hat.data(), 1, r, S_hat.data(), r, n, {}, z_hat.data()));
   log_step("Step 22 completed: Computed z_hat and created final proof");
+
+  // Convert z_hat to polynomial domain for storage
+  std::vector<Rq> z(n);
+  ICICLE_CHECK(USE_SMART_NTT(z_hat.data(), z_hat.size(), NTTDir::kInverse, {}, z.data()));
 
   if (CONSISTENCY_CHECKS) {
     std::vector<Tq> ct_hat(kappa);
-    ICICLE_CHECK(matmul(challenges_hat.data(), 1, r, T_hat.data(), r, kappa, {}, ct_hat.data()));
+    ICICLE_CHECK(USE_SMART_MATMUL(challenges_hat.data(), 1, r, T_hat.data(), r, kappa, {}, ct_hat.data()));
     std::vector<Tq> zA_hat = ajtai_commitment(A, n, kappa, z_hat.data(), z_hat.size());
 
     // zA_hat == \sum_i c_i t_i
@@ -526,7 +537,7 @@ std::pair<LabradorBaseCaseProof, PartialTranscript> LabradorBaseProver::base_cas
     if (succ) { std::cout << "\tbase_prover zA = ct passed\n"; }
   }
 
-  LabradorBaseCaseProof final_proof{z_hat, T_tilde, g_tilde, h_tilde};
+  LabradorBaseCaseProof final_proof{z, T_tilde, g_tilde, h_tilde};
   log_step("base_case_prover completed!");
 
   return std::make_pair(final_proof, trs);
@@ -535,19 +546,17 @@ std::pair<LabradorBaseCaseProof, PartialTranscript> LabradorBaseProver::base_cas
 std::vector<Rq> LabradorProver::prepare_recursion_witness(
   const LabradorParam& prev_param, const LabradorBaseCaseProof& pf, uint32_t base0, size_t mu, size_t nu)
 {
-  // Step 1: Convert z_hat back to polynomial domain
+  // Step 1: Use z stored in polynomial domain
   size_t n = prev_param.n;
-  size_t r = prev_param.r;
 
-  std::vector<Rq> z(n);
-  ICICLE_CHECK(ntt(pf.z_hat.data(), pf.z_hat.size(), NTTDir::kInverse, {}, z.data()));
+  const std::vector<Rq>& z = pf.z;
 
   // Step 2: Decompose z using base0
   std::vector<Rq> z_tilde(2 * n);
-  ICICLE_CHECK(decompose(z.data(), n, base0, {}, z_tilde.data(), z_tilde.size()));
+  ICICLE_CHECK(USE_SMART_DECOMPOSE(z.data(), n, base0, {}, z_tilde.data(), z_tilde.size()));
 
   std::vector<Rq> temp(n);
-  ICICLE_CHECK(recompose(z_tilde.data(), z_tilde.size(), base0, {}, temp.data(), temp.size()));
+  ICICLE_CHECK(USE_SMART_RECOMPOSE(z_tilde.data(), z_tilde.size(), base0, {}, temp.data(), temp.size()));
   if (!poly_vec_eq(z.data(), temp.data(), n)) {
     throw std::runtime_error("Parameter Choice Error: z could not be recomposed from z_tilde in "
                              "prepare_recursion_witness. Consider changing base0 parameter.");

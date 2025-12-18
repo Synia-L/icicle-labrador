@@ -1,30 +1,29 @@
-*.i
-*.ii
-*.gpu
-*.ptx
-*.cubin
-*.bin
-*.fatbin
+# Build artifacts
+build/
+*.o
+*.a
 *.so
-*.nsys-rep
-*.ncu-rep
-*.sage.py
-**/target
-**/.vscode
-**/.*lock*csv#
-**/__pycache__/
-**/.DS_Store
-**/Cargo.lock
-**/icicle/build/
-**/icicle/Testing/
-**/wrappers/rust/icicle-cuda-runtime/src/bindings.rs
-**/build*/*
-.cache*
-**tar.gz
+*.dylib
 
-*.csv
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
-#ignore all backends except cpu
-icicle/backend/*
-!icicle/backend/cpu
-!icicle/backend/cuda_pqc
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test outputs
+*.log
+*.txt
+ntt_diff_*.txt
+
+# Benchmark results
+labrador_benchmark_results.csv
+
+# Temporary files
+*.tmp
+*.bak

@@ -5,23 +5,43 @@ set -e
 
 # Function to display usage information
 show_help() {
-  echo "Usage: $0 [-d DEVICE_TYPE] [-b BACKEND_INSTALL_DIR]"
+  echo "Usage: $0 [-d DEVICE_TYPE] [-b BACKEND_INSTALL_DIR] [-c] [-m] [-v] [-o]"
   echo
   echo "Options:"
   echo "  -d DEVICE_TYPE            Specify the device type (default: CPU)"
   echo "  -b BACKEND_INSTALL_DIR    Specify the backend installation directory (default: empty)"
+  echo "  -c                        Use custom NTT implementation (CUDA only)"
+  echo "  -m                        Use custom MatMul implementation (CUDA only)"
+  echo "  -v                        Use custom VecOps implementation (CUDA only)"
+  echo "  -o                        Use custom Misc Ops implementation (CUDA only, decompose/recompose/jl_projection/matrix_transpose)"
   echo "  -h                        Show this help message"
   exit 0
 }
 
 # Parse command line options
-while getopts ":d:b:h" opt; do
+USE_CUSTOM_NTT=false
+USE_CUSTOM_MATMUL=false
+USE_CUSTOM_VEC_OPS=false
+USE_CUSTOM_MISC_OPS=false
+while getopts ":d:b:cmvoh" opt; do
   case ${opt} in
     d )
       DEVICE_TYPE=$OPTARG
       ;;
     b )
       ICICLE_BACKEND_INSTALL_DIR="$(realpath ${OPTARG})"
+      ;;
+    c )
+      USE_CUSTOM_NTT=true
+      ;;
+    m )
+      USE_CUSTOM_MATMUL=true
+      ;;
+    v )
+      USE_CUSTOM_VEC_OPS=true
+      ;;
+    o )
+      USE_CUSTOM_MISC_OPS=true
       ;;
     h )
       show_help
@@ -55,14 +75,21 @@ ICICLE_BACKEND_SOURCE_DIR="${ICILE_DIR}/backend/${DEVICE_TYPE_LOWERCASE}"
 if [ "$DEVICE_TYPE" != "CPU" ] && [ -z "${ICICLE_BACKEND_INSTALL_DIR}" ]; then
   echo "Downloading Icicle release for ${DEVICE_TYPE}"
   mkdir -p build/icicle_release
-  if [ -z "$(ls -A build/icicle_release)" ]; then
-    wget -q https://github.com/ingonyama-zk/icicle/releases/download/v4.0.0/icicle_4_0_0-ubuntu22-cuda122.tar.gz -O build/icicle_release/icicle.tar.gz
+  
+  # Check if extracted directory exists, not just if tar.gz exists
+  if [ ! -d "build/icicle_release/icicle" ]; then
+    if [ ! -f "build/icicle_release/icicle.tar.gz" ]; then
+      wget -q https://github.com/ingonyama-zk/icicle/releases/download/v4.0.0/icicle_4_0_0-ubuntu22-cuda122.tar.gz -O build/icicle_release/icicle.tar.gz
+    fi
+    echo "Extracting Icicle release..."
     tar -xzf build/icicle_release/icicle.tar.gz -C build/icicle_release
   else
-    echo "Icicle release already present in build/icicle_release, skipping download."
+    echo "Icicle release already extracted in build/icicle_release, skipping."
   fi
-  export ICICLE_BACKEND_INSTALL_DIR=$(realpath "build/icicle_release")
+  
+  export ICICLE_BACKEND_INSTALL_DIR=$(realpath "build/icicle_release/icicle")
   echo "Using downloaded Icicle release at ${ICICLE_BACKEND_INSTALL_DIR}"
+  export LD_LIBRARY_PATH="${ICICLE_BACKEND_INSTALL_DIR}/lib:${LD_LIBRARY_PATH}"
   
   # Build only the src project when using pre-built release
   cmake -DCMAKE_BUILD_TYPE=Release -S "${ICILE_DIR}" -B build/icicle -DRING=babykoala
@@ -90,5 +117,43 @@ else
   cmake --build build/src -j
 fi
 
-./build/src/example "$DEVICE_TYPE"
+# Run the example
+if [ "$DEVICE_TYPE" = "CUDA" ]; then
+  CUSTOM_FLAGS=""
+  if [ "$USE_CUSTOM_NTT" = true ]; then
+    CUSTOM_FLAGS="$CUSTOM_FLAGS --custom-ntt"
+    echo "========================================="
+    echo "CUSTOM NTT ENABLED"
+    echo "========================================="
+  fi
+  if [ "$USE_CUSTOM_MATMUL" = true ]; then
+    CUSTOM_FLAGS="$CUSTOM_FLAGS --custom-matmul"
+    echo "========================================="
+    echo "CUSTOM MATMUL ENABLED"
+    echo "========================================="
+  fi
+  if [ "$USE_CUSTOM_VEC_OPS" = true ]; then
+    CUSTOM_FLAGS="$CUSTOM_FLAGS --custom-vec-ops"
+    echo "========================================="
+    echo "CUSTOM VEC OPS ENABLED"
+    echo "========================================="
+  fi
+  if [ "$USE_CUSTOM_MISC_OPS" = true ]; then
+    CUSTOM_FLAGS="$CUSTOM_FLAGS --custom-misc-ops"
+    echo "========================================="
+    echo "CUSTOM MISC OPS ENABLED"
+    echo "========================================="
+  fi
+  
+  if [ -n "$CUSTOM_FLAGS" ]; then
+    echo ""
+    ./build/src/example "$DEVICE_TYPE" $CUSTOM_FLAGS
+  else
+    ./build/src/example "$DEVICE_TYPE"
+  fi
+else
+  ./build/src/example "$DEVICE_TYPE"
+fi
+
+# Optional: Memory check (uncomment to use)
 # compute-sanitizer --tool memcheck --leak-check full ./build/src/example "$DEVICE_TYPE" > sanitizer_output.log 2>&1
