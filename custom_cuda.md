@@ -16,8 +16,11 @@
 # 启用自定义 VecOps
 ./run.sh -d CUDA -v
 
+# 启用自定义 MiscOps
+./run.sh -d CUDA -o
+
 # 启用全部自定义实现
-./run.sh -d CUDA -c -m -v
+./run.sh -d CUDA -c -m -v -o
 ```
 
 ## 自定义实现文件
@@ -87,6 +90,8 @@
 
 ## 性能基准（n=64, r=8, eq=10, cz=10）
 
+### 优化前性能（简单实现）
+
 | 配置 | Prover 时间 | Verifier 时间 | 总计 | 验证状态 |
 |------|-------------|---------------|------|----------|
 | ICICLE 默认 | ~132 ms | ~132 ms | ~264 ms | ✓ |
@@ -96,25 +101,39 @@
 | Custom (Misc) | ~173 ms | ~173 ms | ~346 ms | ✓ |
 | Custom (all) | ~277 ms | ~277 ms | ~554 ms | ✓ |
 
-**注意**：自定义实现目前性能较慢是因为：
-1. 未优化（简单实现验证正确性优先）
-2. 频繁的主机-设备内存拷贝
-3. 未使用 shared memory tiling
-4. 未融合多个小操作
+### 优化后性能（应用kernel优化）
+
+| 配置 | 总计时间 | 验证状态 | vs 优化前 | vs ICICLE |
+|------|---------|----------|-----------|-----------|
+| ICICLE 默认 | 133 ms | ✓ | - | - |
+| Custom MatMul (优化) | 210 ms | ✓ | **↓8.7%** | +58% |
+| Custom VecOps (优化) | 137 ms | ✓ | **↓2.3%** | +3.2% |
+| Custom Misc (优化) | 172 ms | ✓ | **↓0.3%** | +29% |
+| Custom ALL (优化) | 250.69ms | ✓ | **↓2.5%** | +90% |
 
 
 ## 优化方向
 
-### 短期优化
-1. 减少 H2D/D2H 拷贝，复用 GPU 内存
-2. MatMul：使用 shared memory tiling
-3. VecOps：向量化访存（float2/uint2）
+### 已完成
+1. MatMul：使用 shared memory tiling (32x32 tile for scalar, 16x16 for poly)
+2. VecOps：向量化访存（uint2）+ warp-level归约
+3. MiscOps：Transpose shared memory + padding避免bank conflicts
+4. 部分循环展开 (#pragma unroll) 减少分支开销
+
+1. **持久化GPU内存**: 实现设备端内存池，进一步减少H2D/D2H---done
+3. **预分配内存**: 减少cudaMalloc/cudaFree调用开销--done
+
+### 下一步优化
+1. **持久化GPU内存**: 实现设备端内存池，进一步减少H2D/D2H---done
+2. **批量处理**: 合并多个小矩阵操作为单次kernel启动
+3. **预分配内存**: 减少cudaMalloc/cudaFree调用开销--done
+4. **Decompose/Recompose优化**: 使用寄存器缓存digits
 
 ### 长期优化
-1. Kernel 融合（如 scalar_mul + vector_add）
-2. 批量处理小矩阵减少 launch overhead
-3. 使用 CUDA Streams 并行独立操作
-4. 持久化 GPU 数据避免重复传输
+1. Kernel 融合（可能的点： scalar_mul + vector_add）
+2. 使用 CUDA Streams 并行独立操作
+3. 自适应tile size根据矩阵尺寸动态调整
+4. 考虑使用cuBLAS/cuSPARSE库函数
 
 
 

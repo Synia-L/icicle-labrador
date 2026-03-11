@@ -11,50 +11,28 @@ ICICLE ships highly-tuned GPU and CPU kernels for FFT/NTT, polynomial arithmetic
 
 本项目在 Ingonyama 的 fast-labrador-prover 基础上，实现了自定义的 CUDA NTT，替换了 ICICLE 的默认 NTT 实现。
 
-## 验证状态
 
-- **Roundtrip 测试**: ✅ 通过（256/256 系数完美恢复）
-- **Labrador 验证**: ✅ 通过（SUCCESS!）
-
-## 🚀 快速开始
-
-### 构建并运行（使用 Custom NTT + CUDA）
-```bash
-./run.sh -d CUDA -c
-```
-
-## 核心文件
-
-- **`src/custom_ntt_hardcoded.cu`**: Custom CUDA NTT 实现（Radix-2 DIT/DIF，硬编码 twiddle/coset）
-- **`src/ntt_selector.h`**: NTT 选择器（ICICLE vs Custom）
-- **`src/example.cpp`**: Labrador 主程序
-- **`src/prover.cpp`**: Prover 实现（使用 Custom NTT）
-- **`src/verifier.cpp`**: Verifier 实现
-
-## 技术特性
-
-- **算法**: Radix-2 Decimation-In-Time (Forward) / Decimation-In-Frequency (Inverse)
-- **Negacyclic NTT**: 使用 ψ (128th root of unity) 作为 coset generator
-- **RNS 系统**: BabyBear (2^31 - 2^27 + 1) + KoalaBear (2^31 - 2^24 + 1)
-- **多项式大小**: 64 系数
-- **Batch 处理**: 支持多个多项式同时变换
-
-## 性能
-
-- **Proof 生成**: ~1.2 秒（n=64, r=8）
-- **验证**: 通过
 
 ## 命令行选项
 
 ```bash
-# 使用 ICICLE 默认 NTT (GPU)
-./build/src/example -d CUDA
+# 只使用 ICICLE 默认 CUDA 后端
+./run.sh -d CUDA
 
-# 使用 Custom NTT
-./build/src/example -d CUDA --custom-ntt
+# 启用自定义 NTT
+./run.sh -d CUDA -c
 
-# CPU 模式
-./build/src/example -d CPU
+# 启用自定义 MatMul
+./run.sh -d CUDA -m
+
+# 启用自定义 VecOps
+./run.sh -d CUDA -v
+
+# 启用自定义 MiscOps
+./run.sh -d CUDA -o
+
+# 启用全部自定义实现
+./run.sh -d CUDA -c -m -v -o
 ```
 
 ## 原理说明
@@ -73,7 +51,7 @@ Custom NTT 实现了标准的 FFT 算法，针对有限域进行了优化：
 
 
 
-## 🙏 Credits
+## Credits
 
 
 ```cpp

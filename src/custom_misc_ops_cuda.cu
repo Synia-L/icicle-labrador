@@ -7,6 +7,10 @@
  * 3. matrix_transpose - 矩阵转置
  * 
  * 参考 CPU 版本逻辑
+ * 
+ * 优化特性（自动启用）：
+ * - GPU内存池
+ * - 异步传输 + CUDA Streams
  *****************************************************************************/
 
 #include <cuda_runtime.h>
@@ -18,6 +22,10 @@
 #include "custom_ntt_constants.h"
 #include "icicle/hash/keccak.h"
 #include "icicle/hash/hash.h"
+#include "cuda_memory_pool.h"
+#include "cuda_async_ops.h"
+
+using namespace cuda_opt;
 
 // OpenMP for parallel matrix generation
 #ifdef _OPENMP
@@ -342,12 +350,16 @@ __global__ void jl_projection_kernel(
 
 // ============ 3. Matrix Transpose CUDA Kernel ============
 
+#define TRANSPOSE_TILE_DIM 32
+#define TRANSPOSE_BLOCK_ROWS 8  // 减少bank conflicts
+
 /**
- * @brief 矩阵转置内核（out-of-place）
+ * @brief 矩阵转置内核（out-of-place）- Shared Memory 优化版
  * 
+ * 使用共享内存分块，添加padding避免bank conflicts
  * output[j * nof_rows + i] = input[i * nof_cols + j]
  * 
- * 每个线程处理一个元素的所有 degree 系数
+ * 每个线程块处理一个TRANSPOSE_TILE_DIM x TRANSPOSE_TILE_DIM的tile
  */
 __global__ void matrix_transpose_kernel(
     const uint32_t* input,
@@ -356,18 +368,43 @@ __global__ void matrix_transpose_kernel(
     uint32_t nof_cols,
     uint32_t degree
 ) {
-    uint32_t row = blockIdx.y * blockDim.y + threadIdx.y;
-    uint32_t col = blockIdx.x * blockDim.x + threadIdx.x;
+    // +1 padding to avoid bank conflicts
+    __shared__ uint64_t tile[TRANSPOSE_TILE_DIM][TRANSPOSE_TILE_DIM + 1];
     
-    if (row >= nof_rows || col >= nof_cols) return;
+    // 计算该线程负责的输入位置
+    uint32_t in_col = blockIdx.x * TRANSPOSE_TILE_DIM + threadIdx.x;
+    uint32_t in_row_base = blockIdx.y * TRANSPOSE_TILE_DIM;
     
-    // 转置：input[row][col] -> output[col][row]
+    // 计算该线程负责的输出位置（转置后的位置）
+    uint32_t out_col = blockIdx.y * TRANSPOSE_TILE_DIM + threadIdx.x;
+    uint32_t out_row_base = blockIdx.x * TRANSPOSE_TILE_DIM;
+    
+    // 为每个系数处理转置
     for (uint32_t d = 0; d < degree; ++d) {
-        uint64_t in_idx = (row * nof_cols + col) * degree + d;
-        uint64_t out_idx = (col * nof_rows + row) * degree + d;
+        // 加载数据到shared memory（合并访问输入）
+        for (uint32_t repeat = 0; repeat < TRANSPOSE_TILE_DIM; repeat += TRANSPOSE_BLOCK_ROWS) {
+            uint32_t in_row = in_row_base + threadIdx.y + repeat;
+            if (in_row < nof_rows && in_col < nof_cols) {
+                uint64_t in_idx = (in_row * nof_cols + in_col) * degree + d;
+                tile[threadIdx.y + repeat][threadIdx.x] = load_element_misc(input, in_idx);
+            } else {
+                tile[threadIdx.y + repeat][threadIdx.x] = 0;
+            }
+        }
         
-        uint64_t val = load_element_misc(input, in_idx);
-        store_element_misc(output, out_idx, val);
+        __syncthreads();
+        
+        // 写出数据（合并访问输出）
+        for (uint32_t repeat = 0; repeat < TRANSPOSE_TILE_DIM; repeat += TRANSPOSE_BLOCK_ROWS) {
+            uint32_t out_row = out_row_base + threadIdx.y + repeat;
+            if (out_row < nof_cols && out_col < nof_rows) {
+                uint64_t out_idx = (out_row * nof_rows + out_col) * degree + d;
+                // 注意：从tile读取时，行列互换
+                store_element_misc(output, out_idx, tile[threadIdx.x][threadIdx.y + repeat]);
+            }
+        }
+        
+        __syncthreads();
     }
 }
 
@@ -566,8 +603,12 @@ extern "C" int custom_matrix_transpose_cuda(
 
         cudaMemcpy(d_input, input_host, mat_bytes, cudaMemcpyHostToDevice);
 
-        dim3 block(16, 16);
-        dim3 grid((nof_cols + 15) / 16, (nof_rows + 15) / 16);
+        // 使用优化的transpose配置
+        dim3 block(TRANSPOSE_TILE_DIM, TRANSPOSE_BLOCK_ROWS);
+        dim3 grid(
+            (nof_cols + TRANSPOSE_TILE_DIM - 1) / TRANSPOSE_TILE_DIM, 
+            (nof_rows + TRANSPOSE_TILE_DIM - 1) / TRANSPOSE_TILE_DIM
+        );
 
         matrix_transpose_kernel<<<grid, block>>>(
             d_input, d_output, nof_rows, nof_cols, degree
